@@ -104,18 +104,18 @@ python -m tmclass.cli --max-train 400          # larger training set (slower ali
 
 Sequences absent from `hmmsearch` output scored below the reporting threshold and are counted as negative predictions, not dropped — otherwise the denominator silently shrinks and every metric is inflated.
 
-## Refinements over the original coursework version
+## Pitfalls this pipeline is built to avoid
 
-Reworked from an MSc assignment ([original Greek report](docs/original-report-gr.pdf), [original scripts](docs/original-scripts/)). The original reported sensitivity 1.00 / specificity 0.48 for a full-length model and 0.778 / 0.868 for a TM-region model. Six changes:
+Six failure modes are specific to this kind of sequence-classification work. Each one is easy to hit, and each silently produces numbers that look reasonable.
 
-- **Precision is now reported.** The original quoted only sensitivity and specificity. On its own test set — 9 positives against 121 negatives — specificity 0.868 means 16 false positives, so precision was **0.30**: roughly two of every three positive calls were wrong. Sensitivity and specificity conceal this entirely under class imbalance, which is why MCC and precision are now primary. A test asserts these exact numbers.
-- **A test set large enough to measure anything.** The original evaluated on 9 positive sequences, where one sequence moves sensitivity by 11 points. This version uses 358 positives and 1,060 decoys, plus 5-fold cross-validation with reported standard deviations.
-- **Threshold sweeping instead of a fixed E ≤ 0.05.** ROC and PR curves across every distinct score, with the operating point chosen by MCC. This is what revealed that the conventional cutoff costs more than half the achievable sensitivity.
-- **A silent data-loss bug fixed.** The original split script read cluster representatives out of the CD-HIT `.clstr` file, then kept only those that matched a record in the FASTA (`[records[id] for id in train_ids if id in records]`). CD-HIT truncates names to 20 characters by default, so `sp|Q8WXI7|MUC16_HUMAN` was recorded as `sp|Q8WXI7|MUC16_HUM` and never matched. Re-running that logic against the original's own files: **569 of 676 representatives — 84% — were discarded without warning**, leaving the 107 that happened to have short-enough names, which is exactly where the original's 98 training and 9 test sequences came from. `cd-hit -d 0` now preserves full headers, `subset_fasta` raises on an unmatched identifier instead of skipping it, and `Split` validates that the two partitions sum to their input.
-- **No external web service.** The original depended on a 15 MB TOPCONS submission that took 81 minutes of server time and could not be regenerated without re-submitting. TM coordinates now come from UniProt's own annotation in the same request as the sequences. The TOPCONS parser is retained in [`regions.py`](src/tmclass/regions.py) so the original workflow still runs.
-- **A controlled comparison.** The original's two models were trained on differently derived sets, so the difference between them confounded representation with data. Both models here are built from the same proteins.
+- **Sensitivity and specificity hide precision under class imbalance.** With 9 positives against 121 negatives, a specificity of 0.868 leaves 16 false positives — a precision of **0.30**, meaning two of every three positive calls are wrong, from a pair of metrics that both look respectable. MCC and precision are therefore primary here; a test pins that exact arithmetic so the point cannot quietly regress.
+- **A test set of 9 sequences cannot measure anything.** One sequence moves sensitivity by 11 percentage points, so the difference between two models is indistinguishable from resampling noise. This pipeline evaluates on 358 positives and 1,060 decoys and reports 5-fold cross-validation with standard deviations.
+- **E ≤ 0.05 is a homology-search convention, not an operating point.** Adopting it without checking costs more than half the achievable sensitivity here. Every threshold that changes the confusion matrix is swept, and the operating point is chosen by MCC.
+- **CD-HIT truncates sequence names, and dictionary lookups then fail silently.** `cd-hit` defaults to `-d 20`, so `sp|Q8WXI7|MUC16_HUMAN` is written to the `.clstr` file as `sp|Q8WXI7|MUC16_HUM`. Any downstream `if identifier in records` filter keyed on full FASTA headers then drops most of the dataset without raising — in a 676-sequence clustering, **569 representatives (84%) vanish**, leaving only those whose names happen to fit in 20 characters. Here `cd-hit -d 0` preserves full headers, `subset_fasta` raises on an unmatched identifier rather than skipping it, and `Split` validates that the partitions sum to their input.
+- **Sequences missing from `hmmsearch` output are negatives, not missing data.** Dropping them shrinks the denominator and inflates every metric. They are scored as non-hits explicitly.
+- **Comparing two models trained on differently derived data measures the data, not the models.** Both models here are built from the same proteins and differ only in representation.
 
-Note that the original's headline sensitivity of 1.00 alongside specificity 0.48 is the signature of a model that calls almost everything positive. That is consistent with what this version finds: a profile HMM over full-length sequences of a non-homologous topological class does not learn topology.
+The full-length control is retained precisely because it fails: a profile HMM over whole sequences of a non-homologous topological class reaches AUC 0.833 with errors spread evenly across every decoy class, including proteins with no membrane segment. High sensitivity paired with poor specificity is the signature of a model that calls almost everything positive, and it is what this architecture produces when applied to a class that is topological rather than evolutionary.
 
 ## Repository layout
 
@@ -129,7 +129,6 @@ src/tmclass/
   cli.py        Staged pipeline with cross-validation
 tests/          pytest suite (29 tests)
 results/        Models, sweeps, figures, findings.json
-docs/           Original coursework report and scripts
 ```
 
 ## Output files

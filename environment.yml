@@ -1,0 +1,12 @@
+name: tmclass
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - hmmer>=3.3
+  - clustalo>=1.2
+  - cd-hit>=4.8
+  - biopython>=1.80
+  - matplotlib>=3.7
+  - pytest>=7.0

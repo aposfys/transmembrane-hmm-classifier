@@ -1,6 +1,7 @@
 # Single-Pass Type I Transmembrane Protein Classification: Profile HMM vs Protein Language Model
 
 [![CI](https://github.com/aposfys/transmembrane-hmm-classifier/actions/workflows/ci.yml/badge.svg)](https://github.com/aposfys/transmembrane-hmm-classifier/actions/workflows/ci.yml)
+[![Pipeline](https://github.com/aposfys/transmembrane-hmm-classifier/actions/workflows/pipeline.yml/badge.svg)](https://github.com/aposfys/transmembrane-hmm-classifier/actions/workflows/pipeline.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
@@ -102,6 +103,13 @@ python -m tmclass.cli --heads                     # HMMs only, skip the language
 python -m tmclass.cli --esm-model 35M             # smaller, faster embeddings
 python -m tmclass.cli --esm-model 650M --device cpu
 python -m tmclass.cli --padding 0                 # membrane segment with no flanks
+```
+
+**Smoke runs.** `--max-sequences-per-class N` truncates each UniProt class so the whole pipeline finishes in about a minute. Useful for checking a change end to end without a three-hour wait; the numbers it produces are not comparable to those above.
+
+```bash
+python -m tmclass.cli --max-sequences-per-class 120 --max-train 40 \
+  --folds 0 --heads logreg --esm-model 8M
 ```
 
 **Runtime.** CD-HIT on the 6,343-sequence type I set is the slowest step (~40 min at 40% identity), cached afterwards. A full `make analysis` takes roughly 3 hours on an M4, dominated by ESM-2 650M embedding of ~2,400 sequences. `--esm-model 35M` cuts that to about 25 minutes with a modest accuracy cost. Embeddings are cached by model and sequence set, so re-running a head is instant.

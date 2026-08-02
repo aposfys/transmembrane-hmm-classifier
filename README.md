@@ -170,8 +170,6 @@ results/        Models, sweeps, figures, findings.json
 8. Chicco, D. & Jurman, G. (2020). The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation. *BMC Genomics* **21**, 6.
 9. UniProt Consortium (2023). UniProt: the universal protein knowledgebase in 2023. *Nucleic Acids Research* **51**, D523–D531.
 
-## Author
+---
 
-**Apostolos Fysekidis** — MSc Bioinformatics & Computational Biology, National and Kapodistrian University of Athens.
-
-Licensed under the [MIT License](LICENSE).
+Apostolos Fysekidis · [MIT Licence](LICENSE)

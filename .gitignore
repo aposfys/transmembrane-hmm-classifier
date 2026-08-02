@@ -6,10 +6,13 @@ dist/
 .venv/
 venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
 data/*.tsv
 data/*.fasta
 data/*.clstr
+data/embeddings/
 results/cv/
 results/*.tbl
 results/*.sto

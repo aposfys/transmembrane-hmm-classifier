@@ -9,8 +9,9 @@ threshold is chosen by sweeping rather than fixed by convention.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Sequence
+from itertools import pairwise
 
 # A sequence absent from hmmsearch output scored below the reporting threshold.
 # It is given a worse-than-any-reported E-value so it still counts as a negative
@@ -53,9 +54,7 @@ class Metrics:
     @property
     def f1(self) -> float:
         denominator = self.precision + self.sensitivity
-        return (
-            2 * self.precision * self.sensitivity / denominator if denominator else 0.0
-        )
+        return 2 * self.precision * self.sensitivity / denominator if denominator else 0.0
 
     @property
     def balanced_accuracy(self) -> float:
@@ -93,10 +92,21 @@ def evaluate_at(
     positive_scores: Sequence[float],
     negative_scores: Sequence[float],
     threshold: float,
+    higher_is_better: bool = False,
 ) -> Metrics:
-    """Confusion matrix at one E-value threshold (lower E-value = stronger hit)."""
-    tp = sum(1 for score in positive_scores if score <= threshold)
-    fp = sum(1 for score in negative_scores if score <= threshold)
+    """Confusion matrix at one threshold.
+
+    Args:
+        higher_is_better: ``False`` for E-values, where a *smaller* score is a
+            stronger call; ``True`` for probabilities or decision scores.
+    """
+    if higher_is_better:
+        tp = sum(1 for score in positive_scores if score >= threshold)
+        fp = sum(1 for score in negative_scores if score >= threshold)
+    else:
+        tp = sum(1 for score in positive_scores if score <= threshold)
+        fp = sum(1 for score in negative_scores if score <= threshold)
+
     return Metrics(
         threshold=threshold,
         true_positives=tp,
@@ -109,37 +119,42 @@ def evaluate_at(
 def sweep(
     positive_scores: Sequence[float],
     negative_scores: Sequence[float],
+    higher_is_better: bool = False,
 ) -> list[Metrics]:
     """Evaluate at every threshold that changes the confusion matrix."""
     finite = sorted(
         {score for score in [*positive_scores, *negative_scores] if math.isfinite(score)}
     )
-    # E-values are non-negative, so a negative threshold admits nothing and puts
-    # the sweep's first point at the (0, 0) corner of ROC space. Dividing the
-    # smallest score instead would fail whenever hmmsearch reports an E-value
-    # of exactly 0 for a very strong hit.
-    thresholds = [-1.0, *finite]
-    return [evaluate_at(positive_scores, negative_scores, t) for t in thresholds]
+    if higher_is_better:
+        # A threshold above every score admits nothing, putting the sweep's
+        # first point at the (0, 0) corner of ROC space.
+        ceiling = (finite[-1] + 1.0) if finite else 1.0
+        thresholds = [ceiling, *reversed(finite)]
+    else:
+        # E-values are non-negative, so a negative threshold admits nothing.
+        # Dividing the smallest score instead would fail whenever hmmsearch
+        # reports an E-value of exactly 0 for a very strong hit.
+        thresholds = [-1.0, *finite]
+
+    return [
+        evaluate_at(positive_scores, negative_scores, t, higher_is_better) for t in thresholds
+    ]
 
 
 def roc_auc(curve: Sequence[Metrics]) -> float:
     """Area under the ROC curve, by the trapezoid rule."""
-    points = sorted(
-        {(metrics.false_positive_rate, metrics.sensitivity) for metrics in curve}
-    )
+    points = sorted({(metrics.false_positive_rate, metrics.sensitivity) for metrics in curve})
     points = [(0.0, 0.0), *points, (1.0, 1.0)]
 
     area = 0.0
-    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+    for (x0, y0), (x1, y1) in pairwise(points):
         area += (x1 - x0) * (y0 + y1) / 2
     return round(area, 4)
 
 
 def average_precision(curve: Sequence[Metrics]) -> float:
     """Area under the precision-recall curve."""
-    points = sorted(
-        {(metrics.sensitivity, metrics.precision) for metrics in curve}
-    )
+    points = sorted({(metrics.sensitivity, metrics.precision) for metrics in curve})
     area = 0.0
     previous_recall = 0.0
     for recall, precision in points:

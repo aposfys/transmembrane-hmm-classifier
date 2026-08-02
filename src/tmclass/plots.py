@@ -7,12 +7,19 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt
 
-MODEL_COLOURS = {"full_length": "#b8c4cc", "tm_region": "#1f77b4"}
+MODEL_COLOURS = {
+    "full_length": "#c8ced4",
+    "tm_region": "#1f77b4",
+    "esm_logreg": "#e8a33d",
+    "esm_mlp": "#4f9d69",
+}
 MODEL_LABELS = {
-    "full_length": "Full-length sequences",
-    "tm_region": "TM regions only",
+    "full_length": "Profile HMM, full-length",
+    "tm_region": "Profile HMM, TM regions",
+    "esm_logreg": "ESM-2 + logistic regression",
+    "esm_mlp": "ESM-2 + MLP",
 }
 RED = "#b4413c"
 
@@ -87,11 +94,16 @@ def plot_curves(findings: dict, path: Path) -> Path:
 def plot_confusion(findings: dict, path: Path) -> Path:
     """Confusion matrices at the MCC-optimal threshold, one per model."""
     models = _models(findings)
-    fig, axes = plt.subplots(1, len(models), figsize=(4.6 * len(models), 4.2))
-    if len(models) == 1:
-        axes = [axes]
+    columns = min(len(models), 2)
+    rows = (len(models) + columns - 1) // columns
+    fig, axes = plt.subplots(rows, columns, figsize=(4.6 * columns, 4.4 * rows))
+    axes = [axes] if len(models) == 1 else list(axes.flatten())
 
-    for ax, model in zip(axes, models):
+    for extra in axes[len(models) :]:
+        extra.set_visible(False)
+
+    # axes is padded to a full grid, so it can be longer than models.
+    for ax, model in zip(axes, models, strict=False):
         optimal = findings[model]["at_optimal_cutoff"]
         matrix = [
             [optimal["true_positives"], optimal["false_negatives"]],
@@ -109,8 +121,12 @@ def plot_confusion(findings: dict, path: Path) -> Path:
             for j in range(2):
                 share = matrix[i][j] / total
                 ax.text(
-                    j, i, f"{matrix[i][j]}",
-                    ha="center", va="center", fontsize=15,
+                    j,
+                    i,
+                    f"{matrix[i][j]}",
+                    ha="center",
+                    va="center",
+                    fontsize=15,
                     color="white" if share > 0.4 else "#1c2b36",
                 )
 
@@ -127,5 +143,103 @@ def plot_confusion(findings: dict, path: Path) -> Path:
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200)
+    plt.close(fig)
+    return path
+
+
+def plot_model_comparison(findings: dict, path: Path) -> Path:
+    """Headline bar chart: every model on the metrics that survive imbalance."""
+    models = _models(findings)
+    metrics = [
+        ("roc_auc", "ROC AUC", lambda f: f["roc_auc"]),
+        ("average_precision", "Avg. precision", lambda f: f["average_precision"]),
+        ("mcc", "MCC", lambda f: f["at_optimal_cutoff"]["mcc"]),
+        ("sensitivity", "Sensitivity", lambda f: f["at_optimal_cutoff"]["sensitivity"]),
+        ("precision", "Precision", lambda f: f["at_optimal_cutoff"]["precision"]),
+    ]
+
+    positions = range(len(metrics))
+    width = 0.8 / len(models)
+
+    fig, ax = plt.subplots(figsize=(9.5, 4.8))
+    for index, model in enumerate(models):
+        offset = (index - (len(models) - 1) / 2) * width
+        values = [getter(findings[model]) for _, _, getter in metrics]
+        bars = ax.bar(
+            [p + offset for p in positions],
+            values,
+            width,
+            label=MODEL_LABELS[model],
+            color=MODEL_COLOURS[model],
+        )
+        ax.bar_label(bars, fmt="%.2f", fontsize=7, padding=2)
+
+    ax.set_xticks(list(positions))
+    ax.set_xticklabels([label for _, label, _ in metrics])
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Score")
+    ax.set_title(
+        "Profile HMM versus ESM-2 embeddings on the same held-out test set",
+        fontsize=11,
+    )
+    ax.legend(
+        frameon=False, fontsize=8.5, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.10)
+    )
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", color="#eef1f3")
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_error_by_decoy_class(findings: dict, path: Path) -> Path:
+    """False-positive rate per decoy class, which is where the biology shows."""
+    models = _models(findings)
+    classes = list(findings[models[0]]["false_positives_by_class"])
+
+    positions = range(len(classes))
+    width = 0.8 / len(models)
+
+    fig, ax = plt.subplots(figsize=(8, 4.4))
+    for index, model in enumerate(models):
+        offset = (index - (len(models) - 1) / 2) * width
+        by_class = findings[model]["false_positives_by_class"]
+        values = [100 * by_class[name]["false_positive_rate"] for name in classes]
+        bars = ax.bar(
+            [p + offset for p in positions],
+            values,
+            width,
+            label=MODEL_LABELS[model],
+            color=MODEL_COLOURS[model],
+        )
+        ax.bar_label(bars, fmt="%.1f", fontsize=7, padding=2)
+
+    labels = []
+    for name in classes:
+        entry = findings[models[-1]]["false_positives_by_class"][name]
+        suffix = "\n(never trained on)" if entry.get("held_out_from_training") else ""
+        labels.append(name.replace("_", " ") + suffix)
+
+    ax.set_xticks(list(positions))
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("False-positive rate (%)")
+    ax.set_title(
+        "Where each model makes its mistakes, at its own optimal threshold",
+        fontsize=11,
+    )
+    ax.legend(
+        frameon=False, fontsize=8.5, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.12)
+    )
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", color="#eef1f3")
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return path

@@ -46,8 +46,7 @@ def test_entries_are_sorted_for_determinism(tmp_path):
     proteins = data.parse_tsv(
         _tsv(
             tmp_path,
-            "P00009\tB_HUMAN\tMKVLA\tTRANSMEM 2..4\n"
-            "P00001\tA_HUMAN\tMKVLA\tTRANSMEM 2..4\n",
+            "P00009\tB_HUMAN\tMKVLA\tTRANSMEM 2..4\nP00001\tA_HUMAN\tMKVLA\tTRANSMEM 2..4\n",
         )
     )
     assert [p.accession for p in proteins] == ["P00001", "P00009"]

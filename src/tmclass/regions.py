@@ -18,10 +18,10 @@ class Region:
     """One transmembrane segment plus its flanks."""
 
     accession: str
-    start: int          # 1-based, inclusive, in the parent sequence
+    start: int  # 1-based, inclusive, in the parent sequence
     stop: int
     sequence: str
-    tm_start: int       # 1-based coordinates of the membrane segment itself
+    tm_start: int  # 1-based coordinates of the membrane segment itself
     tm_stop: int
 
     @property
@@ -33,9 +33,7 @@ class Region:
         return self.tm_stop - self.tm_start + 1
 
 
-def extract_regions(
-    proteins: list[Protein], padding: int = DEFAULT_PADDING
-) -> list[Region]:
+def extract_regions(proteins: list[Protein], padding: int = DEFAULT_PADDING) -> list[Region]:
     """Slice every annotated transmembrane segment out, with padded flanks."""
     regions: list[Region] = []
     for protein in proteins:

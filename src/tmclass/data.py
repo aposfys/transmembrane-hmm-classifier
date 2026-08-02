@@ -29,8 +29,7 @@ QUERIES: dict[str, str] = {
     "type_ii": "(reviewed:true) AND (cc_scl_term:SL-9906) AND (ft_transmem:*)",
     "gpcr": '(reviewed:true) AND (family:"g-protein coupled receptor 1 family")',
     "globular": (
-        "(reviewed:true) AND (cc_scl_term:SL-0091) "
-        "NOT (ft_transmem:*) AND (existence:1)"
+        "(reviewed:true) AND (cc_scl_term:SL-0091) NOT (ft_transmem:*) AND (existence:1)"
     ),
 }
 

@@ -27,6 +27,16 @@ def _run(command: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(command, check=True, capture_output=True, text=True)
 
 
+def _is_fresh(output: Path, source: Path) -> bool:
+    """True when ``output`` exists, is non-empty and postdates ``source``."""
+    return (
+        output.exists()
+        and output.stat().st_size > 0
+        and source.exists()
+        and output.stat().st_mtime >= source.stat().st_mtime
+    )
+
+
 # --- redundancy reduction ----------------------------------------------------
 
 
@@ -51,11 +61,16 @@ def cluster(
     _run(
         [
             _require("cd-hit", "conda install -c bioconda cd-hit"),
-            "-i", str(fasta),
-            "-o", str(output),
-            "-c", str(identity),
-            "-n", str(word_size),
-            "-d", "0",  # keep full FASTA headers rather than truncating at 20 chars
+            "-i",
+            str(fasta),
+            "-o",
+            str(output),
+            "-c",
+            str(identity),
+            "-n",
+            str(word_size),
+            "-d",
+            "0",  # keep full FASTA headers rather than truncating at 20 chars
         ]
     )
     return output
@@ -102,8 +117,7 @@ def subset_fasta(fasta: Path, identifiers: set[str], output: Path) -> Path:
     missing = identifiers - records.keys()
     if missing:
         raise KeyError(
-            f"{len(missing)} identifiers not found in {fasta.name}, "
-            f"e.g. {sorted(missing)[:3]}"
+            f"{len(missing)} identifiers not found in {fasta.name}, e.g. {sorted(missing)[:3]}"
         )
 
     SeqIO.write([records[key] for key in sorted(identifiers)], output, "fasta")
@@ -117,14 +131,24 @@ def fasta_identifiers(fasta: Path) -> list[str]:
 # --- alignment and model -----------------------------------------------------
 
 
-def align(fasta: Path, output: Path, threads: int = 1) -> Path:
-    """Align sequences with Clustal Omega, in Stockholm format for hmmbuild."""
+def align(fasta: Path, output: Path, threads: int = 1, cache: bool = True) -> Path:
+    """Align sequences with Clustal Omega, in Stockholm format for hmmbuild.
+
+    Whole-protein alignment is quadratic in sequence length and dominates the
+    runtime, so an existing alignment newer than its input is reused.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
+    if cache and _is_fresh(output, fasta):
+        return output
+
     base = [
         _require("clustalo", "conda install -c bioconda clustalo"),
-        "-i", str(fasta),
-        "-o", str(output),
-        "--outfmt", "st",
+        "-i",
+        str(fasta),
+        "-o",
+        str(output),
+        "--outfmt",
+        "st",
         "--force",
     ]
     # Bioconda's macOS build is compiled without OpenMP and aborts on --threads.
@@ -138,14 +162,17 @@ def align(fasta: Path, output: Path, threads: int = 1) -> Path:
     raise RuntimeError("clustalo failed")
 
 
-def build_hmm(alignment: Path, output: Path, name: str) -> Path:
+def build_hmm(alignment: Path, output: Path, name: str, cache: bool = True) -> Path:
     """Build a profile HMM from a multiple sequence alignment."""
     output.parent.mkdir(parents=True, exist_ok=True)
+    if cache and _is_fresh(output, alignment):
+        return output
     _run(
         [
             _require("hmmbuild", "conda install -c bioconda hmmer"),
             "--amino",
-            "-n", name,
+            "-n",
+            name,
             str(output),
             str(alignment),
         ]
@@ -159,10 +186,13 @@ def search(hmm: Path, target_fasta: Path, output: Path, threads: int = 1) -> Pat
     _run(
         [
             _require("hmmsearch", "conda install -c bioconda hmmer"),
-            "--tblout", str(output),
-            "--max",          # disable heuristic filters, so weak hits are still scored
-            "-E", "1000",     # report generously; thresholding happens at evaluation time
-            "--cpu", str(threads),
+            "--tblout",
+            str(output),
+            "--max",  # disable heuristic filters, so weak hits are still scored
+            "-E",
+            "1000",  # report generously; thresholding happens at evaluation time
+            "--cpu",
+            str(threads),
             str(hmm),
             str(target_fasta),
         ]

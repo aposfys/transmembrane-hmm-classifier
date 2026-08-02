@@ -1,0 +1,94 @@
+name: Pipeline
+
+# The CI workflow proves the code is sound. This one proves the *pipeline* still
+# runs: it installs the real bioinformatics toolchain and executes every stage
+# against the live UniProt API, so an upstream schema change or a broken tool
+# release surfaces here rather than the next time someone runs the analysis.
+#
+# Each UniProt class is truncated so the whole thing finishes in about a minute.
+# The numbers it produces are deliberately not comparable to the published ones.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/tmclass/**"
+      - "environment.yml"
+      - ".github/workflows/pipeline.yml"
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: End-to-end smoke run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the bioinformatics toolchain
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+
+      - name: Install the package
+        run: pip install -e ".[dev,embeddings]"
+
+      - name: Verify the external tools are callable
+        run: |
+          hmmbuild -h > /dev/null && echo "hmmbuild ok"
+          hmmsearch -h > /dev/null && echo "hmmsearch ok"
+          clustalo --version && cd-hit -h 2>&1 | head -1
+
+      - name: Run every stage at reduced scale
+        run: |
+          python -m tmclass.cli \
+            --data-dir ci-data --results-dir ci-results \
+            --max-sequences-per-class 120 --max-train 40 --folds 0 \
+            --heads logreg --esm-model 8M --max-train-plm 60 \
+            --embed-batch-size 16
+
+      - name: Check the run produced a complete result
+        run: |
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          findings = json.loads(Path("ci-results/findings.json").read_text())
+          required = {"dataset", "full_length", "tm_region", "esm_logreg"}
+          missing = required - findings.keys()
+          if missing:
+              sys.exit(f"findings.json is missing: {sorted(missing)}")
+
+          for model in ("full_length", "tm_region", "esm_logreg"):
+              auc = findings[model]["roc_auc"]
+              if not 0.0 <= auc <= 1.0:
+                  sys.exit(f"{model}: ROC AUC {auc} is out of range")
+              # A pipeline that silently scores nothing would still emit valid
+              # JSON, so require the models to beat chance by some margin.
+              if auc < 0.6:
+                  sys.exit(f"{model}: ROC AUC {auc} suggests the pipeline is broken")
+              print(f"{model}: AUC {auc:.3f}")
+
+          for name in ("model_comparison.png", "roc_pr_curves.png", "tm_region.hmm"):
+              if not (Path("ci-results") / name).exists():
+                  sys.exit(f"missing expected output: {name}")
+          print("pipeline output complete")
+          PY
+
+      - name: Upload outputs for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-results
+          path: ci-results/
+          retention-days: 7

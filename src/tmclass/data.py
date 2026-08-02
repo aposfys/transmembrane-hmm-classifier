@@ -92,11 +92,17 @@ def fetch_class(name: str, destination: Path) -> Path:
     return destination
 
 
-def parse_tsv(path: Path) -> list[Protein]:
+def parse_tsv(path: Path, limit: int | None = None) -> list[Protein]:
     """Parse a UniProt TSV export into Protein records, sorted by accession.
 
     Sorting makes every downstream split deterministic regardless of the order
     UniProt happened to stream the results in.
+
+    Args:
+        limit: Keep only the first N entries after sorting. Intended for smoke
+            runs that need to exercise the whole pipeline quickly; CD-HIT on the
+            full type I set alone takes about 40 minutes. Truncating after the
+            sort keeps the subset deterministic and reproducible.
     """
     reader = csv.DictReader(io.StringIO(path.read_text(encoding="utf-8")), delimiter="\t")
     proteins = [
@@ -113,7 +119,7 @@ def parse_tsv(path: Path) -> list[Protein]:
         if row.get("Sequence")
     ]
     proteins.sort(key=lambda protein: protein.accession)
-    return proteins
+    return proteins[:limit] if limit else proteins
 
 
 def write_fasta(proteins: list[Protein], path: Path) -> Path:

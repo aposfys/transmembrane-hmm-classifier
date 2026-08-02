@@ -64,6 +64,19 @@ def test_single_tm_filter_removes_multipass(tmp_path):
     assert [p.accession for p in kept] == ["P00001"]
 
 
+def test_limit_truncates_after_sorting(tmp_path):
+    """The subset must be deterministic, so truncation happens after the sort."""
+    body = "".join(f"P0000{i}\tE{i}_HUMAN\tMKVLA\tTRANSMEM 2..4\n" for i in (5, 1, 9, 3))
+    path = _tsv(tmp_path, body)
+    assert [p.accession for p in data.parse_tsv(path, limit=2)] == ["P00001", "P00003"]
+    assert len(data.parse_tsv(path)) == 4
+
+
+def test_limit_of_none_keeps_everything(tmp_path):
+    path = _tsv(tmp_path, "P00001\tA_HUMAN\tMKVLA\tTRANSMEM 2..4\n")
+    assert len(data.parse_tsv(path, limit=None)) == 1
+
+
 def test_entries_without_a_sequence_are_dropped(tmp_path):
     proteins = data.parse_tsv(_tsv(tmp_path, "P00001\tTEST_HUMAN\t\tTRANSMEM 2..4\n"))
     assert proteins == []

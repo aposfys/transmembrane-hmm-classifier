@@ -109,6 +109,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "dominates the runtime."
         ),
     )
+    parser.add_argument(
+        "--max-sequences-per-class",
+        type=int,
+        default=0,
+        help=(
+            "Truncate each fetched UniProt class to its first N entries. 0 uses "
+            "everything. Exists so the whole pipeline can be exercised end to "
+            "end in minutes rather than hours -- CD-HIT on the full type I set "
+            "alone takes ~40 min. Results from a truncated run are not "
+            "comparable to the published ones."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=20250101)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--no-figures", action="store_true")
@@ -178,8 +190,12 @@ def build_dataset(args) -> Dataset:
     """Download every class, remove redundancy, and split into train and test."""
     print("=== Dataset ===")
 
+    limit = args.max_sequences_per_class or None
+    if limit:
+        print(f"Smoke run: each class truncated to {limit} sequences")
+
     positives = data.single_tm_only(
-        data.parse_tsv(data.fetch_class("type_i", args.data_dir / "type_i.tsv"))
+        data.parse_tsv(data.fetch_class("type_i", args.data_dir / "type_i.tsv"), limit=limit)
     )
     print(f"Single-pass type I with exactly one annotated TM segment: {len(positives)}")
 
@@ -222,7 +238,9 @@ def build_dataset(args) -> Dataset:
     negative_records: list = []
     train_negative_records: list = []
     for name in data.NEGATIVE_CLASSES:
-        proteins = data.parse_tsv(data.fetch_class(name, args.data_dir / f"{name}.tsv"))
+        proteins = data.parse_tsv(
+            data.fetch_class(name, args.data_dir / f"{name}.tsv"), limit=limit
+        )
         fasta = data.write_fasta(proteins, args.data_dir / f"{name}.fasta")
         reduced = pipeline.cluster(
             fasta,
@@ -291,7 +309,11 @@ def training_fasta_for(model: str, train_fasta: Path, args) -> Path:
     if model == "full_length":
         return train_fasta
 
-    proteins = data.single_tm_only(data.parse_tsv(args.data_dir / "type_i.tsv"))
+    proteins = data.single_tm_only(
+        data.parse_tsv(
+            args.data_dir / "type_i.tsv", limit=args.max_sequences_per_class or None
+        )
+    )
     wanted = {record.id.split("|")[1] for record in SeqIO.parse(train_fasta, "fasta")}
     selected = [protein for protein in proteins if protein.accession in wanted]
     extracted = regions.extract_regions(selected, padding=args.padding)
@@ -397,7 +419,11 @@ def cross_validate(model: str, dataset: Dataset, args) -> dict:
             dataset.train_fasta, set(remainder), fold_dir / "train.fasta"
         )
         if model == "tm_region":
-            proteins = data.single_tm_only(data.parse_tsv(args.data_dir / "type_i.tsv"))
+            proteins = data.single_tm_only(
+                data.parse_tsv(
+                    args.data_dir / "type_i.tsv", limit=args.max_sequences_per_class or None
+                )
+            )
             wanted = {i.split("|")[1] for i in remainder}
             fold_train = regions.write_fasta(
                 regions.extract_regions(

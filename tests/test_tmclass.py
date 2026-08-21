@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
+import io
 import math
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -80,6 +83,62 @@ def test_limit_of_none_keeps_everything(tmp_path):
 def test_entries_without_a_sequence_are_dropped(tmp_path):
     proteins = data.parse_tsv(_tsv(tmp_path, "P00001\tTEST_HUMAN\t\tTRANSMEM 2..4\n"))
     assert proteins == []
+
+
+# --- UniProt downloads -------------------------------------------------------
+
+
+class _Response(io.BytesIO):
+    """Minimal stand-in for the urlopen context manager."""
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *_) -> None:
+        self.close()
+
+
+def _failing_opener(errors: list[Exception], payload: bytes = b"ok"):
+    """An urlopen replacement that raises each error in turn, then succeeds."""
+    attempts: list[str] = []
+
+    def opener(url, timeout=None):
+        attempts.append(url)
+        index = len(attempts) - 1
+        if index < len(errors) and errors[index] is not None:
+            raise errors[index]
+        return _Response(payload)
+
+    return opener, attempts
+
+
+def test_a_truncated_stream_is_retried(monkeypatch):
+    """UniProt cuts chunked responses off mid-transfer; that must not abort a run."""
+    opener, attempts = _failing_opener([http.client.IncompleteRead(b"partial"), None])
+    monkeypatch.setattr(data.urllib.request, "urlopen", opener)
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+
+    assert data._fetch("https://example.invalid/stream") == b"ok"
+    assert len(attempts) == 2
+
+
+def test_a_network_error_is_retried(monkeypatch):
+    opener, attempts = _failing_opener([urllib.error.URLError("connection reset"), None])
+    monkeypatch.setattr(data.urllib.request, "urlopen", opener)
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+
+    assert data._fetch("https://example.invalid/stream") == b"ok"
+    assert len(attempts) == 2
+
+
+def test_fetch_gives_up_after_the_retry_budget(monkeypatch):
+    opener, attempts = _failing_opener([http.client.IncompleteRead(b"") for _ in range(5)])
+    monkeypatch.setattr(data.urllib.request, "urlopen", opener)
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="after 5 attempts"):
+        data._fetch("https://example.invalid/stream", retries=5)
+    assert len(attempts) == 5
 
 
 # --- region extraction -------------------------------------------------------

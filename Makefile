@@ -1,4 +1,4 @@
-.PHONY: install data analysis quick cv test clean all
+.PHONY: install data analysis quick cv snapshot test clean all
 
 PYTHON ?= python3
 
@@ -30,6 +30,11 @@ quick: data
 ## Cross-validate both models (slow: each full-length fold is a whole-protein alignment)
 cv: data
 	$(PYTHON) -m tmclass.cli --cv-models full_length tm_region
+
+## Regenerate the pinned UniProt snapshot used when UniProt is unreachable.
+## Changes the dataset any fallback run produces, so commit it on its own.
+snapshot:
+	$(PYTHON) -m tmclass.refresh_snapshot
 
 test:
 	$(PYTHON) -m pytest -q

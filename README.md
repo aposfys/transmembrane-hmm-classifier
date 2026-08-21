@@ -138,11 +138,35 @@ Each of these silently produces numbers that look reasonable.
 - **Padding dominates transformer batches.** Mixing a 40-residue window with a 1,022-residue one wastes most of the forward pass; length-sorted batching is worth more than half the embedding runtime.
 - **A decoy class absent from training measures generalisation, not accuracy** — see the design note above.
 
+## Data fetching and the offline fallback
+
+UniProt is the only source that carries both the subcellular-location terms and the `ft_transmem` coordinates these class definitions rely on, so there is no equivalent database to fail over to. What there is instead is a ladder of three sources, tried in order:
+
+1. **`/stream`** — one request for a whole class. The fast path when UniProt is healthy.
+2. **Paginated `/search`** — the same query walked in 200-record pages, following cursor links. More requests, but a stall costs one page rather than the whole class. This is what carries a run through a degraded UniProt.
+3. **The pinned snapshot** — `src/tmclass/snapshot/`, a gzipped copy of all four classes with a checksum per class. Used only when both live routes are exhausted.
+
+Every step retries with exponential backoff. `IncompleteRead` counts as transient: UniProt's stream endpoint truncates chunked responses under load, and because that exception is *not* a `URLError` an earlier version let it escape the retry loop and kill the run outright.
+
+**The fallback is never silent.** Whichever source is used is recorded per class under `data_source` in `findings.json`, and a run that touches the snapshot prints a warning naming the snapshot's date. Results built on stale data are always identifiable as such after the fact.
+
+```json
+"data_source": {
+  "type_i":   {"source": "uniprot"},
+  "type_ii":  {"source": "snapshot", "snapshot_date": "2026-08-21",
+               "uniprot_error": "UniProt request failed after 5 attempts: HTTP Error 500"}
+}
+```
+
+Pass `--no-snapshot-fallback` to make a run fail rather than accept the stale copy — appropriate when the results must reflect current UniProt. Refresh the snapshot with `make snapshot`; because it changes the dataset any fallback run produces, commit it on its own.
+
 ## Repository layout
 
 ```
 src/tmclass/
   data.py       UniProt queries, TSV parsing, TM-coordinate extraction
+  snapshot/     Pinned UniProt copy (gzipped TSV + MANIFEST.json) for outages
+  refresh_snapshot.py  Regenerates that snapshot; see `make snapshot`
   regions.py    TM region slicing with flanks; TOPCONS parser
   pipeline.py   CD-HIT, splitting, Clustal Omega, hmmbuild, hmmsearch, tblout parsing
   plm.py        ESM-2 embedding with windowing, length-bucketed batching, caching
@@ -151,7 +175,7 @@ src/tmclass/
   evaluate.py   Confusion matrix, metric suite, threshold sweep, ROC/PR areas
   plots.py      Curves, confusion matrices, model and error-class comparisons
   cli.py        Staged pipeline with cross-validation
-tests/          pytest suite (29 tests)
+tests/          pytest suite (39 tests)
 results/        Models, sweeps, figures, findings.json
 ```
 
@@ -193,7 +217,7 @@ The MIT licence above covers **the code in this repository only**. The data it r
 
 External tools are invoked as separate executables via `subprocess`, not linked into this codebase, so their copyleft terms do not extend to the code here. Anyone redistributing a bundle that *includes* those binaries takes on their obligations.
 
-**What this repository ships.** No third-party sequence data is committed — every class is fetched from UniProt at run time and cached locally (`data/` is git-ignored). The profile HMMs and metrics under `results/` are derived works built from CC BY 4.0 UniProt sequences, so the attribution above applies to them too. If you reuse them, cite UniProt as well.
+**What this repository ships.** Every class is fetched from UniProt at run time and cached locally (`data/` is git-ignored). One exception: `src/tmclass/snapshot/` commits a gzipped copy of all four classes so a run survives a UniProt outage (see [Data fetching and the offline fallback](#data-fetching-and-the-offline-fallback)). That snapshot is UniProt data redistributed under CC BY 4.0, which its licence permits with attribution; `MANIFEST.json` records the date, the exact query, and a checksum per class. The profile HMMs and metrics under `results/` are derived works built from the same CC BY 4.0 sequences, so the attribution above applies to them too. If you reuse either, cite UniProt as well.
 
 ---
 

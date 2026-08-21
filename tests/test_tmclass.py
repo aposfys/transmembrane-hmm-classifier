@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import http.client
 import io
+import json
 import math
 import urllib.error
 from pathlib import Path
@@ -91,6 +94,10 @@ def test_entries_without_a_sequence_are_dropped(tmp_path):
 class _Response(io.BytesIO):
     """Minimal stand-in for the urlopen context manager."""
 
+    def __init__(self, payload: bytes = b"", link: str = "") -> None:
+        super().__init__(payload)
+        self.headers = {"Link": link}
+
     def __enter__(self) -> _Response:
         return self
 
@@ -139,6 +146,121 @@ def test_fetch_gives_up_after_the_retry_budget(monkeypatch):
     with pytest.raises(RuntimeError, match="after 5 attempts"):
         data._fetch("https://example.invalid/stream", retries=5)
     assert len(attempts) == 5
+
+
+# --- pagination and the snapshot fallback ------------------------------------
+
+
+def _paged_opener(pages: list[tuple[str, str]]):
+    """Serve canned (body, Link header) pairs in order."""
+    served: list[str] = []
+
+    def opener(url, timeout=None):
+        body, link = pages[len(served)]
+        served.append(url)
+        return _Response(body.encode(), link)
+
+    return opener, served
+
+
+def test_pagination_follows_cursor_links_and_drops_repeated_headers(monkeypatch):
+    header = "Entry\tEntry Name\tSequence\tTransmembrane"
+    opener, served = _paged_opener(
+        [
+            (f"{header}\nP00001\tA\tMKV\tTRANSMEM 1..2", '<https://next/2>; rel="next"'),
+            (f"{header}\nP00002\tB\tMKV\tTRANSMEM 1..2", ""),
+        ]
+    )
+    monkeypatch.setattr(data.urllib.request, "urlopen", opener)
+
+    payload = data._fetch_paginated("type_i").decode()
+
+    assert payload.count("Entry\tEntry Name") == 1
+    assert "P00001" in payload and "P00002" in payload
+    assert served[1] == "https://next/2"
+
+
+def _snapshot(tmp_path: Path, name: str, payload: bytes, date: str = "2026-08-21"):
+    (tmp_path / f"{name}.tsv.gz").write_bytes(gzip.compress(payload))
+    (tmp_path / "MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "date": date,
+                "classes": {name: {"sha256": hashlib.sha256(payload).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_snapshot_is_used_when_uniprot_is_unreachable(tmp_path, monkeypatch):
+    payload = b"Entry\tEntry Name\tSequence\tTransmembrane\nP00001\tA\tMKV\tTRANSMEM 1..2\n"
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    _snapshot(snap, "type_i", payload)
+    monkeypatch.setattr(data, "SNAPSHOT_DIR", snap)
+    monkeypatch.setattr(data, "PROVENANCE", {})
+
+    def dead(url, timeout=None):
+        raise urllib.error.URLError("uniprot is down")
+
+    monkeypatch.setattr(data.urllib.request, "urlopen", dead)
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+
+    destination = data.fetch_class("type_i", tmp_path / "out" / "type_i.tsv")
+
+    assert destination.read_bytes() == payload
+    assert data.PROVENANCE["type_i"]["source"] == "snapshot"
+    assert data.PROVENANCE["type_i"]["snapshot_date"] == "2026-08-21"
+
+
+def test_snapshot_fallback_can_be_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        data.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: (_ for _ in ()).throw(urllib.error.URLError("down")),
+    )
+
+    with pytest.raises(RuntimeError, match="UniProt request failed"):
+        data.fetch_class("type_i", tmp_path / "type_i.tsv", allow_snapshot=False)
+
+
+def test_a_corrupt_snapshot_is_rejected(tmp_path, monkeypatch):
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    _snapshot(snap, "type_i", b"real payload")
+    (snap / "type_i.tsv.gz").write_bytes(gzip.compress(b"tampered payload"))
+    monkeypatch.setattr(data, "SNAPSHOT_DIR", snap)
+
+    with pytest.raises(RuntimeError, match="corrupt"):
+        data.read_snapshot("type_i")
+
+
+def test_a_missing_snapshot_says_how_to_rebuild_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(data, "SNAPSHOT_DIR", tmp_path / "absent")
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        data.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: (_ for _ in ()).throw(urllib.error.URLError("down")),
+    )
+
+    with pytest.raises(RuntimeError, match="make snapshot"):
+        data.fetch_class("type_i", tmp_path / "type_i.tsv")
+
+
+def test_live_uniprot_is_recorded_as_the_source(tmp_path, monkeypatch):
+    payload = b"Entry\tEntry Name\tSequence\tTransmembrane\nP00001\tA\tMKV\tTRANSMEM 1..2\n"
+    monkeypatch.setattr(data, "PROVENANCE", {})
+    monkeypatch.setattr(
+        data.urllib.request, "urlopen", lambda url, timeout=None: _Response(payload)
+    )
+
+    data.fetch_class("type_i", tmp_path / "type_i.tsv")
+
+    assert data.PROVENANCE["type_i"] == {"source": "uniprot"}
 
 
 # --- region extraction -------------------------------------------------------

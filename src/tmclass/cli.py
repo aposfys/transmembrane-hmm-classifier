@@ -124,6 +124,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20250101)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--no-figures", action="store_true")
+    parser.add_argument(
+        "--no-snapshot-fallback",
+        action="store_true",
+        help=(
+            "Fail instead of falling back to the pinned snapshot when UniProt is "
+            "unreachable. The fallback keeps a run alive during an outage and is "
+            "always recorded under data_source in findings.json, but a run that "
+            "must reflect current UniProt should refuse the stale copy outright."
+        ),
+    )
 
     plm_group = parser.add_argument_group("protein language model benchmark")
     plm_group.add_argument(
@@ -195,7 +205,14 @@ def build_dataset(args) -> Dataset:
         print(f"Smoke run: each class truncated to {limit} sequences")
 
     positives = data.single_tm_only(
-        data.parse_tsv(data.fetch_class("type_i", args.data_dir / "type_i.tsv"), limit=limit)
+        data.parse_tsv(
+            data.fetch_class(
+                "type_i",
+                args.data_dir / "type_i.tsv",
+                allow_snapshot=not args.no_snapshot_fallback,
+            ),
+            limit=limit,
+        )
     )
     print(f"Single-pass type I with exactly one annotated TM segment: {len(positives)}")
 
@@ -239,7 +256,12 @@ def build_dataset(args) -> Dataset:
     train_negative_records: list = []
     for name in data.NEGATIVE_CLASSES:
         proteins = data.parse_tsv(
-            data.fetch_class(name, args.data_dir / f"{name}.tsv"), limit=limit
+            data.fetch_class(
+                name,
+                args.data_dir / f"{name}.tsv",
+                allow_snapshot=not args.no_snapshot_fallback,
+            ),
+            limit=limit,
         )
         fasta = data.write_fasta(proteins, args.data_dir / f"{name}.fasta")
         reduced = pipeline.cluster(
@@ -272,6 +294,16 @@ def build_dataset(args) -> Dataset:
             f"Negative class {name:9s}: {len(ids):5d} non-redundant, "
             f"{len(sampled):4d} in the shared test set, "
             f"{len(remaining):4d} available for head training"
+        )
+
+    stale = {k: v for k, v in data.PROVENANCE.items() if v["source"] == "snapshot"}
+    if stale:
+        dates = sorted({v["snapshot_date"] for v in stale.values()})
+        print(
+            f"\n!! {len(stale)} of {len(data.PROVENANCE)} classes came from the pinned "
+            f"snapshot ({', '.join(dates)}), not live UniProt.\n"
+            f"!! These results do not reflect current UniProt. "
+            f"See data_source in findings.json."
         )
 
     negative_fasta = args.data_dir / "negatives.fasta"
@@ -495,7 +527,8 @@ def main(argv: list[str] | None = None) -> int:
             "positive_test": len(dataset.positive_test),
             "negatives_by_class": {k: len(v) for k, v in dataset.negatives.items()},
             "train": len(pipeline.fasta_identifiers(dataset.train_fasta)),
-        }
+        },
+        "data_source": dict(data.PROVENANCE),
     }
 
     print("\n=== Models ===")

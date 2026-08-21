@@ -69,6 +69,25 @@ jobs:
           if missing:
               sys.exit(f"findings.json is missing: {sorted(missing)}")
 
+          # This job exists to catch upstream breakage, so a snapshot fallback
+          # must not pass silently -- it would hide the very thing being watched.
+          # It is a warning rather than a failure: a UniProt outage is not a
+          # defect in this repository, and a red run every night for a week
+          # trains everyone to ignore the alert that matters.
+          stale = {
+              name: record
+              for name, record in findings.get("data_source", {}).items()
+              if record.get("source") == "snapshot"
+          }
+          if stale:
+              detail = "; ".join(
+                  f"{name} (snapshot {record['snapshot_date']}: {record['uniprot_error']})"
+                  for name, record in sorted(stale.items())
+              )
+              print(f"::warning title=UniProt unreachable::Fell back to the pinned snapshot for {detail}")
+          else:
+              print("all classes came from live UniProt")
+
           for model in ("full_length", "tm_region", "esm_logreg"):
               auc = findings[model]["roc_auc"]
               if not 0.0 <= auc <= 1.0:

@@ -30,6 +30,11 @@ tmclass = "tmclass.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The pinned UniProt snapshot ships with the package so the offline fallback
+# works from an installed wheel, not just from a source checkout.
+[tool.setuptools.package-data]
+tmclass = ["snapshot/*.tsv.gz", "snapshot/MANIFEST.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

@@ -9,6 +9,7 @@ which removes the dependency on an external topology-prediction web service.
 from __future__ import annotations
 
 import csv
+import http.client
 import io
 import re
 import time
@@ -59,17 +60,24 @@ class Protein:
         return len(self.sequence)
 
 
-def _fetch(url: str, retries: int = 3) -> bytes:
+# The stream endpoint sends chunked responses and regularly cuts one off
+# part-way through, which surfaces as http.client.IncompleteRead rather than a
+# URLError. IncompleteRead subclasses HTTPException, so catching URLError alone
+# lets a truncated download escape the retry loop and abort the whole run.
+_TRANSIENT_ERRORS = (urllib.error.URLError, http.client.HTTPException, TimeoutError)
+
+
+def _fetch(url: str, retries: int = 5) -> bytes:
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(url, timeout=300) as response:
                 return response.read()
-        except (urllib.error.URLError, TimeoutError) as error:
+        except _TRANSIENT_ERRORS as error:
             last_error = error
             if attempt < retries - 1:
                 time.sleep(2.0**attempt)
-    raise RuntimeError(f"UniProt request failed: {last_error}")
+    raise RuntimeError(f"UniProt request failed after {retries} attempts: {last_error}")
 
 
 def fetch_class(name: str, destination: Path) -> Path:

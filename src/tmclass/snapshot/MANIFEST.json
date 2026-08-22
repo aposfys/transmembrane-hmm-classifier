@@ -1,0 +1,31 @@
+{
+  "date": "2026-08-21",
+  "source": "https://rest.uniprot.org/uniprotkb/search",
+  "fields": "accession,id,sequence,ft_transmem",
+  "classes": {
+    "type_i": {
+      "query": "(reviewed:true) AND (cc_scl_term:SL-9905) AND (ft_transmem:*)",
+      "records": 6493,
+      "sha256": "c1784ee910fea94fdca4e31bead25143f331341a9079c0c34fe10e308b9c764c",
+      "bytes": 5148957
+    },
+    "type_ii": {
+      "query": "(reviewed:true) AND (cc_scl_term:SL-9906) AND (ft_transmem:*)",
+      "records": 4169,
+      "sha256": "16982dca0b7c1396cc8997d5a3cbd62019058e743dac2e1ee225810a9a48522e",
+      "bytes": 2193930
+    },
+    "gpcr": {
+      "query": "(reviewed:true) AND (family:\"g-protein coupled receptor 1 family\")",
+      "records": 2529,
+      "sha256": "cc2c8a2493b7462c7b911948b23eebafc2c32cd399d943631b1222420e3063a5",
+      "bytes": 2277614
+    },
+    "globular": {
+      "query": "(reviewed:true) AND (cc_scl_term:SL-0091) NOT (ft_transmem:*) AND (existence:1)",
+      "records": 2479,
+      "sha256": "3a5fbe986c304e03881a0286a0c31b44e0be544c60f26190d41aff08b234689b",
+      "bytes": 1458429
+    }
+  }
+}

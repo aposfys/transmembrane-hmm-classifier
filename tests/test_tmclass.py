@@ -238,6 +238,50 @@ def test_a_corrupt_snapshot_is_rejected(tmp_path, monkeypatch):
         data.read_snapshot("type_i")
 
 
+def test_a_stalling_uniprot_falls_back_within_its_budget(tmp_path, monkeypatch):
+    """A hang must reach the snapshot, not outlast the job that would use it."""
+    payload = b"Entry\tEntry Name\tSequence\tTransmembrane\nP00001\tA\tMKV\tTRANSMEM 1..2\n"
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    _snapshot(snap, "type_i", payload)
+    monkeypatch.setattr(data, "SNAPSHOT_DIR", snap)
+    monkeypatch.setattr(data, "PROVENANCE", {})
+
+    # A clock that jumps 45s per reading, so the 120s budget lapses after a few
+    # attempts without the test actually waiting.
+    ticks = iter(range(0, 100_000, 45))
+    monkeypatch.setattr(data.time, "monotonic", lambda: float(next(ticks)))
+    monkeypatch.setattr(data.time, "sleep", lambda _: None)
+
+    calls: list[str] = []
+
+    def stalling(url, timeout=None):
+        calls.append(url)
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr(data.urllib.request, "urlopen", stalling)
+
+    data.fetch_class("type_i", tmp_path / "out.tsv", budget=120)
+
+    assert data.PROVENANCE["type_i"]["source"] == "snapshot"
+    # The point is that it stopped early rather than retrying indefinitely.
+    assert len(calls) < 6, f"kept trying past the budget: {len(calls)} requests"
+
+
+def test_the_budget_stops_pagination_partway(tmp_path, monkeypatch):
+    """A half-walked class must not be returned as if it were complete."""
+    header = "Entry\tEntry Name\tSequence\tTransmembrane"
+    opener, _ = _paged_opener(
+        [(f"{header}\nP00001\tA\tMKV\tTRANSMEM 1..2", '<https://next/2>; rel="next"')] * 5
+    )
+    monkeypatch.setattr(data.urllib.request, "urlopen", opener)
+    ticks = iter([0.0, 10.0, 500.0, 500.0, 500.0])
+    monkeypatch.setattr(data.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(RuntimeError, match="budget exhausted"):
+        data._fetch_paginated("type_i", deadline=100.0)
+
+
 def test_a_missing_snapshot_says_how_to_rebuild_it(tmp_path, monkeypatch):
     monkeypatch.setattr(data, "SNAPSHOT_DIR", tmp_path / "absent")
     monkeypatch.setattr(data.time, "sleep", lambda _: None)

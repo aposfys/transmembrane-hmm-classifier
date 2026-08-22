@@ -125,6 +125,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--no-figures", action="store_true")
     parser.add_argument(
+        "--uniprot-budget",
+        type=float,
+        default=data.LIVE_BUDGET,
+        help=(
+            "Seconds of live UniProt attempts allowed per class before falling "
+            "back to the snapshot. Exists because an unbounded wait is not a "
+            "fallback: a stalled endpoint can outlast any CI limit and be killed "
+            "before the snapshot is ever reached."
+        ),
+    )
+    parser.add_argument(
         "--no-snapshot-fallback",
         action="store_true",
         help=(
@@ -210,6 +221,7 @@ def build_dataset(args) -> Dataset:
                 "type_i",
                 args.data_dir / "type_i.tsv",
                 allow_snapshot=not args.no_snapshot_fallback,
+                budget=args.uniprot_budget,
             ),
             limit=limit,
         )
@@ -260,6 +272,7 @@ def build_dataset(args) -> Dataset:
                 name,
                 args.data_dir / f"{name}.tsv",
                 allow_snapshot=not args.no_snapshot_fallback,
+                budget=args.uniprot_budget,
             ),
             limit=limit,
         )

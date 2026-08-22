@@ -54,6 +54,7 @@ jobs:
           python -m tmclass.cli \
             --data-dir ci-data --results-dir ci-results \
             --max-sequences-per-class 120 --max-train 40 --folds 0 \
+            --uniprot-budget 120 \
             --heads logreg --esm-model 8M --max-train-plm 60 \
             --embed-batch-size 16
 

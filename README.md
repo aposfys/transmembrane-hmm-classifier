@@ -148,6 +148,8 @@ UniProt is the only source that carries both the subcellular-location terms and 
 
 Every step retries with exponential backoff. `IncompleteRead` counts as transient: UniProt's stream endpoint truncates chunked responses under load, and because that exception is *not* a `URLError` an earlier version let it escape the retry loop and kill the run outright.
 
+Live attempts are capped by `--uniprot-budget` (default 300 s per class, plus up to one 60 s request already in flight). **An unbounded wait is not a fallback** — the first version of this had no ceiling, and a stalled UniProt outlasted the 30-minute CI limit, so the job was killed before it ever reached the snapshot it was carrying.
+
 **The fallback is never silent.** Whichever source is used is recorded per class under `data_source` in `findings.json`, and a run that touches the snapshot prints a warning naming the snapshot's date. Results built on stale data are always identifiable as such after the fact.
 
 ```json

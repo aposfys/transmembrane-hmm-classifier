@@ -30,6 +30,22 @@ UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 # full class stays well under a hundred requests.
 PAGE_SIZE = 200
 
+# Seconds allowed on one HTTP request before it is retried. A degraded UniProt
+# accepts a connection and then stalls, so this is what turns a hang into a
+# retry rather than a wait.
+REQUEST_TIMEOUT = 60
+
+# Total seconds of live UniProt attempts per class before giving up and using
+# the snapshot. Without a ceiling the tiers below cannot be reached in practice:
+# retrying a stalled stream five times, then paginating a slow class, ran past a
+# 30-minute CI limit and the job was killed before any fallback happened. A
+# fallback that is only reachable in unbounded time is not a fallback.
+#
+# The deadline is only checked between attempts, so a class can overshoot by up
+# to one REQUEST_TIMEOUT: budget the worst case as LIVE_BUDGET + REQUEST_TIMEOUT
+# per class when sizing a CI limit.
+LIVE_BUDGET = 300
+
 FIELDS = "accession,id,sequence,ft_transmem"
 
 SNAPSHOT_DIR = Path(__file__).resolve().parent / "snapshot"
@@ -86,12 +102,18 @@ _NEXT_LINK = re.compile(r'<(.+?)>;\s*rel="next"')
 PROVENANCE: dict[str, dict[str, str]] = {}
 
 
-def _request(url: str, retries: int = 5) -> tuple[bytes, str]:
-    """Fetch one URL with backoff, returning the body and its Link header."""
+def _request(url: str, retries: int = 5, deadline: float | None = None) -> tuple[bytes, str]:
+    """Fetch one URL with backoff, returning the body and its Link header.
+
+    ``deadline`` is a time.monotonic() value past which no further attempt is
+    started, so a stalling endpoint cannot consume the whole run.
+    """
     last_error: Exception | None = None
     for attempt in range(retries):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(f"UniProt time budget exhausted after {attempt} attempts")
         try:
-            with urllib.request.urlopen(url, timeout=300) as response:
+            with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT) as response:
                 return response.read(), response.headers.get("Link", "")
         except _TRANSIENT_ERRORS as error:
             last_error = error
@@ -100,8 +122,8 @@ def _request(url: str, retries: int = 5) -> tuple[bytes, str]:
     raise RuntimeError(f"UniProt request failed after {retries} attempts: {last_error}")
 
 
-def _fetch(url: str, retries: int = 5) -> bytes:
-    return _request(url, retries=retries)[0]
+def _fetch(url: str, retries: int = 5, deadline: float | None = None) -> bytes:
+    return _request(url, retries=retries, deadline=deadline)[0]
 
 
 def _query_params(name: str, **extra: object) -> str:
@@ -110,17 +132,20 @@ def _query_params(name: str, **extra: object) -> str:
     )
 
 
-def _fetch_paginated(name: str) -> bytes:
+def _fetch_paginated(name: str, deadline: float | None = None) -> bytes:
     """Walk the search endpoint page by page, following its cursor links.
 
     The stream endpoint builds the whole response server-side and times out on
     large classes whenever UniProt is under load. Paginating costs more requests
     but each one is small, so a stall costs one page instead of the entire class.
+
+    A partial walk is never returned: a class cut short would silently shrink the
+    dataset, which is worse than falling through to the snapshot.
     """
     url: str | None = f"{UNIPROT_SEARCH}?{_query_params(name, size=PAGE_SIZE)}"
     lines: list[str] = []
     while url:
-        body, link = _request(url)
+        body, link = _request(url, deadline=deadline)
         page = body.decode("utf-8").splitlines()
         # Every page repeats the TSV header; keep it only from the first.
         lines.extend(page if not lines else page[1:])
@@ -157,7 +182,13 @@ def read_snapshot(name: str) -> bytes:
     return payload
 
 
-def fetch_class(name: str, destination: Path, *, allow_snapshot: bool = True) -> Path:
+def fetch_class(
+    name: str,
+    destination: Path,
+    *,
+    allow_snapshot: bool = True,
+    budget: float = LIVE_BUDGET,
+) -> Path:
     """Download one sequence class as TSV, including transmembrane features.
 
     Tries the stream endpoint first because it is one request when UniProt is
@@ -173,12 +204,17 @@ def fetch_class(name: str, destination: Path, *, allow_snapshot: bool = True) ->
         PROVENANCE[name] = {"source": "cache", "path": str(destination)}
         return destination
 
+    deadline = time.monotonic() + budget
     try:
         try:
-            payload = _fetch(f"{UNIPROT_STREAM}?{_query_params(name)}")
+            # Two attempts only: when the stream endpoint is unwell, pagination is
+            # a better use of the remaining budget than retrying it three more times.
+            payload = _fetch(
+                f"{UNIPROT_STREAM}?{_query_params(name)}", retries=2, deadline=deadline
+            )
         except RuntimeError as stream_error:
             print(f"  {name}: stream endpoint failed ({stream_error}); paginating instead")
-            payload = _fetch_paginated(name)
+            payload = _fetch_paginated(name, deadline=deadline)
         PROVENANCE[name] = {"source": "uniprot"}
     except RuntimeError as error:
         if not allow_snapshot:

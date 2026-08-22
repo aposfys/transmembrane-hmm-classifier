@@ -177,7 +177,7 @@ src/tmclass/
   evaluate.py   Confusion matrix, metric suite, threshold sweep, ROC/PR areas
   plots.py      Curves, confusion matrices, model and error-class comparisons
   cli.py        Staged pipeline with cross-validation
-tests/          pytest suite (39 tests)
+tests/          pytest suite (42 tests)
 results/        Models, sweeps, figures, findings.json
 ```
 

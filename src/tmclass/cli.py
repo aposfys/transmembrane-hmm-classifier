@@ -12,7 +12,7 @@ from typing import Any
 
 from Bio import SeqIO
 
-from . import data, evaluate, heads, pipeline, plm, regions
+from . import data, evaluate, heads, intervals, pipeline, plm, regions
 
 MODELS = ("full_length", "tm_region")
 
@@ -577,6 +577,17 @@ def main(argv: list[str] | None = None) -> int:
 
     summary_path = args.results_dir / "findings.json"
     summary_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
+
+    # Every headline number is one estimate from one held-out split, and the
+    # per-decoy-class rates rest on counts small enough that a bare point
+    # estimate misleads. Intervals are computed from the counts already in
+    # `findings`, so this adds no model fitting.
+    print("\n=== Confidence intervals ===\n")
+    interval_report = intervals.summarise(findings)
+    print(intervals.format_summary(interval_report))
+    (args.results_dir / "intervals.json").write_text(
+        json.dumps(interval_report, indent=2) + "\n", encoding="utf-8"
+    )
 
     if not args.no_figures:
         from .plots import (

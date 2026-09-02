@@ -150,3 +150,39 @@ results/        Models, sweeps, figures, findings.json
    **21**, 6.
 9. UniProt Consortium (2023). UniProt: the universal protein knowledgebase in 2023. *Nucleic
    Acids Research* **51**, D523–D531.
+
+## Uncertainty in the reported numbers
+
+Every headline figure is one estimate from one held-out split of 358 positives and 888
+decoys. Several of the most quoted ones — the per-decoy-class false-positive rates — rest on
+counts small enough that the point estimate alone misleads, and a rate reported as "0.0%"
+from 0 of 172 GPCR decoys is the clearest case.
+
+Two interval methods are used, both computable from counts the pipeline already saves, so
+`python -m tmclass.intervals results/findings.json` regenerates the whole report without
+refitting a model or recomputing an embedding:
+
+- **Wilson score intervals** for proportions. Chosen over the normal approximation because
+  it stays inside [0, 1] and keeps near-nominal coverage at the extremes, which is exactly
+  where the interesting counts sit here (Brown, Cai & DasGupta, *Statistical Science* 2001).
+  A normal-approximation interval on 0/172 is [0, 0], which would assert the rate is zero.
+- **Hanley–McNeil standard errors** for ROC AUC, which need only the AUC and the two class
+  sizes (Hanley & McNeil, *Radiology* 1982).
+
+### What the intervals change
+
+| Claim | Verdict |
+| --- | --- |
+| ESM-2 beats both profile HMMs | **Holds.** All four cross-model AUC intervals separate. |
+| ESM-2 + MLP is the best model | **Not established.** 0.982 [0.972, 0.992] against logreg's 0.980 [0.970, 0.990]. |
+| Type II decoys are the hard class | **Holds for three models of four.** The full-length HMM confuses GPCRs significantly more. |
+| Type II error rate falls across model generations | **Not established.** Only the TM-region HMM and the MLP separate on that class. |
+
+### The caveat that belongs with these intervals
+
+All four models are scored on the *same* sequences, so their errors are correlated. Asking
+whether two Hanley–McNeil intervals overlap is therefore a **conservative** test — it will
+miss differences a paired test would find, which is the likely situation for the two ESM
+heads. A paired DeLong test on per-sequence scores is the sharper instrument and is the
+natural next step; it needs the raw scores rather than the summary counts, which is the one
+thing `findings.json` does not currently persist.

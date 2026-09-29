@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 import re
 import shutil
@@ -48,16 +49,27 @@ def cluster(
 ) -> Path:
     """Collapse near-duplicate sequences with CD-HIT, keeping one per cluster.
 
-    Cached on the output path, which encodes the identity threshold, so
-    re-running the pipeline does not repeat the clustering.
+    Cached against a checksum of the input FASTA and the parameters, stored next
+    to the output. Keying the cache on the output path alone let a clustering of
+    a different input (a truncated smoke run, or type I before the single-TM
+    filter) be reused silently by a later full run.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists() and output.stat().st_size > 0:
-        return output
 
     # CD-HIT requires a word size compatible with the identity threshold.
     if word_size is None:
         word_size = 2 if identity < 0.5 else 3 if identity < 0.6 else 5
+
+    key = hashlib.sha256(fasta.read_bytes())
+    key.update(f"identity={identity} word_size={word_size}".encode())
+    stamp = output.with_name(output.name + ".input.sha256")
+    if (
+        output.exists()
+        and output.stat().st_size > 0
+        and stamp.exists()
+        and stamp.read_text(encoding="utf-8").strip() == key.hexdigest()
+    ):
+        return output
     _run(
         [
             _require("cd-hit", "conda install -c bioconda cd-hit"),
@@ -73,6 +85,7 @@ def cluster(
             "0",  # keep full FASTA headers rather than truncating at 20 chars
         ]
     )
+    stamp.write_text(key.hexdigest() + "\n", encoding="utf-8")
     return output
 
 
@@ -181,7 +194,13 @@ def build_hmm(alignment: Path, output: Path, name: str, cache: bool = True) -> P
 
 
 def search(hmm: Path, target_fasta: Path, output: Path, threads: int = 1) -> Path:
-    """Score every sequence in a FASTA file against a profile HMM."""
+    """Score every sequence in a FASTA file against a profile HMM.
+
+    The E-value hmmsearch reports is scaled by the number of sequences in the
+    target file, so E-values from two separate searches are not comparable.
+    Anything that ranks sequences against each other should go through
+    :func:`search_together`.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(
         [
@@ -198,6 +217,32 @@ def search(hmm: Path, target_fasta: Path, output: Path, threads: int = 1) -> Pat
         ]
     )
     return output
+
+
+def concatenate_fasta(fastas: list[Path], output: Path) -> Path:
+    """Write the records of several FASTA files into one, in order."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    SeqIO.write(
+        [record for fasta in fastas for record in SeqIO.parse(fasta, "fasta")],
+        output,
+        "fasta",
+    )
+    return output
+
+
+def search_together(
+    hmm: Path, fastas: list[Path], combined: Path, output: Path, threads: int = 1
+) -> dict[str, float]:
+    """Score positives and decoys in one hmmsearch run and return their E-values.
+
+    hmmsearch multiplies each P-value by the size of the target file. Searching
+    358 positives and 888 decoys as two files put the two classes on E-value
+    scales 2.5x apart, which shifted every threshold and inflated the ROC AUC.
+    One search over the combined set gives every sequence the same scale.
+    """
+    return parse_tblout(
+        search(hmm, concatenate_fasta(fastas, combined), output, threads=threads)
+    )
 
 
 # --- parsing hmmsearch output ------------------------------------------------

@@ -23,8 +23,7 @@ models here are evaluated on the *same* test set, so their errors are
 correlated. Comparing two models by asking whether their Hanley--McNeil
 intervals overlap is conservative -- it will miss differences a paired test
 would find. A paired DeLong test is the right instrument, and it needs
-per-sequence scores; :func:`tmclass.benchmark.run` now persists those so the
-comparison can be made directly.
+per-sequence scores, which findings.json does not store yet.
 """
 
 from __future__ import annotations

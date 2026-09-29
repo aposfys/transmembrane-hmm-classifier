@@ -32,10 +32,10 @@ jobs:
         shell: bash -el {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the bioinformatics toolchain
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: environment.yml
           cache-environment: true
@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload outputs for inspection
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pipeline-results
           path: ci-results/

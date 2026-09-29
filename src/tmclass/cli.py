@@ -116,8 +116,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Truncate each fetched UniProt class to its first N entries. 0 uses "
             "everything. Exists so the whole pipeline can be exercised end to "
-            "end in minutes rather than hours -- CD-HIT on the full type I set "
-            "alone takes ~40 min. Results from a truncated run are not "
+            "end in minutes rather than hours, mostly by shrinking the ESM-2 "
+            "embedding step. Results from a truncated run are not "
             "comparable to the published ones."
         ),
     )

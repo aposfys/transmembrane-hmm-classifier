@@ -1,4 +1,4 @@
-.PHONY: install data analysis quick cv snapshot test clean all
+.PHONY: install data analysis quick cv snapshot test clean clean-data all
 
 PYTHON ?= python3
 
@@ -8,7 +8,7 @@ all: analysis
 ## come from environment.yml:
 ##   conda env create -f environment.yml && conda activate tmclass
 install:
-	$(PYTHON) -m pip install -e ".[dev]"
+	$(PYTHON) -m pip install -e ".[dev,embeddings]"
 
 ## Fetch all four sequence classes from UniProt and cluster them at 40% identity.
 ## This is the slowest step (~40 min for CD-HIT on the type I set) but its
@@ -16,16 +16,16 @@ install:
 data:
 	$(PYTHON) -c "from pathlib import Path; \
 	from tmclass import data, pipeline; \
-	[pipeline.cluster(data.write_fasta(data.parse_tsv(data.fetch_class(c, Path('data')/f'{c}.tsv')), Path('data')/f'{c}.fasta'), Path('data')/f'{c}_nr40.fasta') \
+	[pipeline.cluster(data.write_fasta((data.single_tm_only if c == 'type_i' else list)(data.parse_tsv(data.fetch_class(c, Path('data')/f'{c}.tsv'))), Path('data')/f'{c}.fasta'), Path('data')/f'{c}_nr40.fasta') \
 	 for c in ('type_i', 'type_ii', 'gpcr', 'globular')]"
 
 ## Both models, 5-fold cross-validation of the TM-region model, and figures
 analysis: data
 	$(PYTHON) -m tmclass.cli
 
-## TM-region model only, no cross-validation
+## TM-region model only, no cross-validation, no ESM-2 benchmark
 quick: data
-	$(PYTHON) -m tmclass.cli --models tm_region --folds 0
+	$(PYTHON) -m tmclass.cli --models tm_region --folds 0 --heads
 
 ## Cross-validate both models (slow: each full-length fold is a whole-protein alignment)
 cv: data

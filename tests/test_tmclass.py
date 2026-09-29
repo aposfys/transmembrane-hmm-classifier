@@ -215,6 +215,29 @@ def test_snapshot_is_used_when_uniprot_is_unreachable(tmp_path, monkeypatch):
     assert data.PROVENANCE["type_i"]["snapshot_date"] == "2026-08-21"
 
 
+def test_the_snapshot_can_be_requested_outright(tmp_path, monkeypatch):
+    """--snapshot reads the pinned copy even over a cached live download."""
+    payload = b"Entry\tEntry Name\tSequence\tTransmembrane\nP00001\tA\tMKV\tTRANSMEM 1..2\n"
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    _snapshot(snap, "type_i", payload)
+    monkeypatch.setattr(data, "SNAPSHOT_DIR", snap)
+    monkeypatch.setattr(data, "PROVENANCE", {})
+    monkeypatch.setattr(
+        data.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: pytest.fail("UniProt must not be contacted"),
+    )
+    cached = tmp_path / "type_i.tsv"
+    cached.write_bytes(b"a stale live download")
+
+    data.fetch_class("type_i", cached, use_snapshot=True)
+
+    assert cached.read_bytes() == payload
+    assert data.PROVENANCE["type_i"]["source"] == "snapshot"
+    assert data.PROVENANCE["type_i"]["snapshot_date"] == "2026-08-21"
+
+
 def test_snapshot_fallback_can_be_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(data.time, "sleep", lambda _: None)
     monkeypatch.setattr(
@@ -396,6 +419,151 @@ def test_tblout_keeps_the_best_evalue_per_target(tmp_path):
     assert hits == {"targetA": 1e-20, "targetB": 0.5}
 
 
+# --- one E-value scale for positives and decoys -----------------------------
+
+
+def _fake_tools(monkeypatch, searches: list[Path], p_value: float = 1e-3):
+    """Stand in for clustalo, hmmbuild, cd-hit and hmmsearch.
+
+    The fake hmmsearch gives every target the same P-value and reports
+    E = P x (number of sequences in the target file), which is how HMMER scales
+    a full-sequence E-value when no -Z is given.
+    """
+
+    def run(command):
+        tool = command[0]
+        if tool == "hmmsearch":
+            target = Path(command[-1])
+            searches.append(target)
+            names = pipeline.fasta_identifiers(target)
+            Path(command[command.index("--tblout") + 1]).write_text(
+                "".join(
+                    f"{name} - model - {p_value * len(names):.6g} 10.0 0.0 "
+                    "1 10 0 1 1 0 0 1 1 1 1 -\n"
+                    for name in names
+                ),
+                encoding="utf-8",
+            )
+        elif tool == "clustalo":
+            Path(command[command.index("-o") + 1]).write_text("# STOCKHOLM 1.0\n//\n")
+        elif tool == "hmmbuild":
+            Path(command[-2]).write_text("HMMER3/f\n//\n")
+        elif tool == "cd-hit":
+            source = Path(command[command.index("-i") + 1])
+            Path(command[command.index("-o") + 1]).write_bytes(source.read_bytes())
+        return None
+
+    monkeypatch.setattr(pipeline, "_require", lambda tool, hint: tool)
+    monkeypatch.setattr(pipeline, "_run", run)
+
+
+def _fasta(path: Path, names: list[str]) -> Path:
+    path.write_text("".join(f">{name}\nMKVLAAGIVLLL\n" for name in names), encoding="utf-8")
+    return path
+
+
+def _toy_dataset(tmp_path: Path):
+    from tmclass.cli import Dataset
+
+    positives = ["sp|P00001|POS1", "sp|P00002|POS2"]
+    decoys = {"type_ii": ["sp|Q00001|NEG1", "sp|Q00002|NEG2"], "gpcr": ["sp|Q00003|NEG3"]}
+    train = [f"sp|P1000{i}|TRN{i}" for i in range(4)]
+    return Dataset(
+        train_fasta=_fasta(tmp_path / "train.fasta", train),
+        positive_test=positives,
+        negatives=decoys,
+        negative_fasta=_fasta(
+            tmp_path / "negatives.fasta", [n for names in decoys.values() for n in names]
+        ),
+        positive_fasta=_fasta(tmp_path / "positives.fasta", positives),
+        train_negatives={"type_ii": [], "gpcr": []},
+        train_negative_fasta=None,
+        full_train_fasta=tmp_path / "train.fasta",
+    )
+
+
+def test_positives_and_decoys_share_one_evalue_scale(tmp_path, monkeypatch):
+    """Identical P-values must give identical E-values whichever class a sequence is in.
+
+    Searching the positives and the decoys as two files put them on scales
+    that differ by the ratio of the file sizes, so positives looked better than
+    decoys with the same raw score. Here every sequence scores the same, so an
+    honest evaluation has nothing to separate and the AUC is exactly 0.5.
+    """
+    from argparse import Namespace
+
+    from tmclass.cli import evaluate_model
+
+    searches: list[Path] = []
+    _fake_tools(monkeypatch, searches)
+    dataset = _toy_dataset(tmp_path)
+    args = Namespace(data_dir=tmp_path, results_dir=tmp_path / "results", threads=1)
+
+    result = evaluate_model("tm_region", tmp_path / "model.hmm", dataset, args)
+
+    assert len(searches) == 1
+    searched = set(pipeline.fasta_identifiers(searches[0]))
+    assert searched == set(dataset.positive_test) | set(dataset.all_negatives)
+    assert result["roc_auc"] == pytest.approx(0.5)
+
+
+def test_cross_validation_folds_share_one_evalue_scale(tmp_path, monkeypatch):
+    """Each fold scores its held-out positives and the decoys in one search."""
+    from argparse import Namespace
+
+    from tmclass.cli import cross_validate
+
+    searches: list[Path] = []
+    _fake_tools(monkeypatch, searches)
+    dataset = _toy_dataset(tmp_path)
+    args = Namespace(
+        results_dir=tmp_path / "results",
+        data_dir=tmp_path,
+        folds=2,
+        seed=1,
+        threads=1,
+        padding=10,
+        max_sequences_per_class=0,
+    )
+
+    cross_validate("full_length", dataset, args)
+
+    assert len(searches) == 2
+    for target in searches:
+        searched = set(pipeline.fasta_identifiers(target))
+        assert set(dataset.all_negatives) <= searched
+        assert len(searched) == len(dataset.all_negatives) + 2
+
+
+# --- clustering cache --------------------------------------------------------
+
+
+def test_clustering_is_redone_when_its_input_changes(tmp_path, monkeypatch):
+    """A cached clustering of a different input must not be reused.
+
+    Keyed on the output path alone, a truncated smoke run or an unfiltered
+    type I set left behind a clustering that a later full run picked up.
+    """
+    searches: list[Path] = []
+    _fake_tools(monkeypatch, searches)
+    calls = []
+    run = pipeline._run
+    monkeypatch.setattr(
+        pipeline, "_run", lambda command: calls.append(command) or run(command)
+    )
+
+    source = _fasta(tmp_path / "in.fasta", ["a", "b"])
+    output = tmp_path / "in_nr40.fasta"
+    pipeline.cluster(source, output)
+    pipeline.cluster(source, output)
+    assert len(calls) == 1, "an unchanged input should reuse the cached clustering"
+
+    _fasta(source, ["a", "b", "c"])
+    pipeline.cluster(source, output)
+    assert len(calls) == 2
+    assert pipeline.fasta_identifiers(output) == ["a", "b", "c"]
+
+
 # --- metrics -----------------------------------------------------------------
 
 
@@ -471,6 +639,26 @@ def test_best_by_maximises_the_criterion():
     assert evaluate.best_by(curve, "mcc").mcc == max(m.mcc for m in curve)
 
 
+# --- reusing the ESM-2 benchmark ---------------------------------------------
+
+
+def test_the_esm_benchmark_is_reused_only_for_the_same_dataset(tmp_path):
+    from tmclass.cli import reuse_benchmark
+
+    dataset = {"positive_test": 3, "negatives_by_class": {"gpcr": 2}, "train": 4}
+    earlier = {
+        "dataset": dataset,
+        "tm_region": {"roc_auc": 0.1},
+        "esm_logreg": {"roc_auc": 0.9},
+    }
+
+    assert reuse_benchmark(earlier, dataset, tmp_path) == {"esm_logreg": {"roc_auc": 0.9}}
+    with pytest.raises(SystemExit, match="different dataset"):
+        reuse_benchmark(earlier, {**dataset, "positive_test": 4}, tmp_path)
+    with pytest.raises(SystemExit, match="no ESM-2 results"):
+        reuse_benchmark({"dataset": dataset}, dataset, tmp_path)
+
+
 # --- end-to-end results ------------------------------------------------------
 
 
@@ -518,7 +706,11 @@ def test_globular_decoys_are_separated_perfectly(findings):
 
 
 def test_type_ii_is_the_hardest_decoy_class(findings):
-    """Type II shares the single-helix architecture and differs only in orientation."""
+    """Type II shares the single-helix architecture and differs only in orientation.
+
+    This is the point estimate for the TM-region HMM. Its interval does not
+    separate type II from GPCRs, see test_intervals.py.
+    """
     by_class = findings["tm_region"]["false_positives_by_class"]
     rates = {name: entry["false_positive_rate"] for name, entry in by_class.items()}
     assert max(rates, key=rates.get) == "type_ii"

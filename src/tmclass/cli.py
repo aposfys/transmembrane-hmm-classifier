@@ -145,6 +145,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "must reflect current UniProt should refuse the stale copy outright."
         ),
     )
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help=(
+            "Build the dataset from the pinned UniProt snapshot instead of live "
+            "UniProt. This reproduces the published dataset exactly, and is "
+            "recorded under data_source in findings.json."
+        ),
+    )
 
     plm_group = parser.add_argument_group("protein language model benchmark")
     plm_group.add_argument(
@@ -189,6 +198,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     plm_group.add_argument(
+        "--reuse-benchmark",
+        type=Path,
+        default=None,
+        metavar="FINDINGS",
+        help=(
+            "Copy the ESM-2 results from an earlier findings.json instead of "
+            "embedding again. Refused unless that run used the same dataset. "
+            "Lets the HMM side be re-run without hours of ESM-2 650M embedding."
+        ),
+    )
+    plm_group.add_argument(
         "--full-precision",
         action="store_true",
         help="Embed in float32 instead of float16 (slower, no practical gain).",
@@ -222,6 +242,7 @@ def build_dataset(args) -> Dataset:
                 args.data_dir / "type_i.tsv",
                 allow_snapshot=not args.no_snapshot_fallback,
                 budget=args.uniprot_budget,
+                use_snapshot=args.snapshot,
             ),
             limit=limit,
         )
@@ -273,6 +294,7 @@ def build_dataset(args) -> Dataset:
                 args.data_dir / f"{name}.tsv",
                 allow_snapshot=not args.no_snapshot_fallback,
                 budget=args.uniprot_budget,
+                use_snapshot=args.snapshot,
             ),
             limit=limit,
         )
@@ -371,25 +393,18 @@ def training_fasta_for(model: str, train_fasta: Path, args) -> Path:
 
 def evaluate_model(model: str, hmm: Path, dataset: Dataset, args) -> dict:
     """Score the positive and negative test sets and sweep the threshold."""
-    positive_hits = pipeline.parse_tblout(
-        pipeline.search(
-            hmm,
-            dataset.positive_fasta,
-            args.results_dir / f"{model}_positive.tbl",
-            threads=args.threads,
-        )
-    )
-    negative_hits = pipeline.parse_tblout(
-        pipeline.search(
-            hmm,
-            dataset.negative_fasta,
-            args.results_dir / f"{model}_negative.tbl",
-            threads=args.threads,
-        )
+    # One search over positives and decoys together, so their E-values share
+    # one database size and can be thresholded against each other.
+    hits = pipeline.search_together(
+        hmm,
+        [dataset.positive_fasta, dataset.negative_fasta],
+        args.data_dir / "test_all.fasta",
+        args.results_dir / f"{model}_test.tbl",
+        threads=args.threads,
     )
 
-    positive_scores = evaluate.scores_for(dataset.positive_test, positive_hits)
-    negative_scores = evaluate.scores_for(dataset.all_negatives, negative_hits)
+    positive_scores = evaluate.scores_for(dataset.positive_test, hits)
+    negative_scores = evaluate.scores_for(dataset.all_negatives, hits)
 
     curve = evaluate.sweep(positive_scores, negative_scores)
     auc = evaluate.roc_auc(curve)
@@ -412,7 +427,7 @@ def evaluate_model(model: str, hmm: Path, dataset: Dataset, args) -> dict:
 
     per_class = {}
     for name, identifiers in dataset.negatives.items():
-        class_scores = evaluate.scores_for(identifiers, negative_hits)
+        class_scores = evaluate.scores_for(identifiers, hits)
         false_positives = sum(1 for score in class_scores if score <= optimal.threshold)
         per_class[name] = {
             "sequences": len(identifiers),
@@ -486,18 +501,17 @@ def cross_validate(model: str, dataset: Dataset, args) -> dict:
         held_out_fasta = pipeline.subset_fasta(
             dataset.train_fasta, set(held_out), fold_dir / "held_out.fasta"
         )
-        positive_hits = pipeline.parse_tblout(
-            pipeline.search(hmm, held_out_fasta, fold_dir / "positive.tbl", args.threads)
-        )
-        negative_hits = pipeline.parse_tblout(
-            pipeline.search(
-                hmm, dataset.negative_fasta, fold_dir / "negative.tbl", args.threads
-            )
+        hits = pipeline.search_together(
+            hmm,
+            [held_out_fasta, dataset.negative_fasta],
+            fold_dir / "test_all.fasta",
+            fold_dir / "test.tbl",
+            args.threads,
         )
 
         metrics = evaluate.evaluate_at(
-            evaluate.scores_for(held_out, positive_hits),
-            evaluate.scores_for(dataset.all_negatives, negative_hits),
+            evaluate.scores_for(held_out, hits),
+            evaluate.scores_for(dataset.all_negatives, hits),
             threshold=0.05,
         )
         scores.append(
@@ -530,9 +544,39 @@ def cross_validate(model: str, dataset: Dataset, args) -> dict:
     return {"folds": scores, "summary": summary}
 
 
+def reuse_benchmark(
+    earlier: dict[str, Any], dataset: dict[str, Any], path: Path
+) -> dict[str, Any]:
+    """Take the ESM-2 blocks of an earlier findings.json built on the same dataset.
+
+    The heads are scored on the shared test set only, so their results do not
+    depend on anything the HMM side computes. They do depend on the dataset,
+    and an earlier run on different data is refused rather than merged.
+    """
+    if earlier.get("dataset") != dataset:
+        raise SystemExit(
+            f"{path} was produced on a different dataset "
+            f"({earlier.get('dataset')} against {dataset}), so its ESM-2 results "
+            "cannot be reused"
+        )
+    blocks = {key: value for key, value in earlier.items() if key.startswith("esm_")}
+    if not blocks:
+        raise SystemExit(f"{path} holds no ESM-2 results to reuse")
+    print(f"\nReusing ESM-2 results for {', '.join(sorted(blocks))} from {path}")
+    return blocks
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     args.results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Read before anything is written, since the earlier file may be the one
+    # this run is about to replace.
+    earlier_benchmark = (
+        json.loads(args.reuse_benchmark.read_text(encoding="utf-8"))
+        if args.reuse_benchmark
+        else None
+    )
 
     dataset = build_dataset(args)
     findings: dict[str, Any] = {
@@ -557,7 +601,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {args.folds}-fold cross-validation:")
             findings[model]["cross_validation"] = cross_validate(model, dataset, args)
 
-    if args.heads:
+    summary_path = args.results_dir / "findings.json"
+    # Written now as well as at the end, so a failure in the embedding stage
+    # cannot discard the HMM results.
+    summary_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
+
+    if earlier_benchmark is not None:
+        findings.update(
+            reuse_benchmark(earlier_benchmark, findings["dataset"], args.reuse_benchmark)
+        )
+        findings["benchmark_source"] = {"reused_from": str(args.reuse_benchmark)}
+    elif args.heads:
         # Imported here so the base install does not need scikit-learn or torch.
         from . import benchmark
 
@@ -575,7 +629,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    summary_path = args.results_dir / "findings.json"
     summary_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
 
     # Every headline number is one estimate from one held-out split, and the

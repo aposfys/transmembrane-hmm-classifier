@@ -12,6 +12,7 @@ venv/
 data/*.tsv
 data/*.fasta
 data/*.clstr
+data/*.sha256
 data/embeddings/
 results/cv/
 results/*.tbl

@@ -95,17 +95,29 @@ def test_the_two_esm_heads_are_not_distinguishable(report):
     assert not pairs[("ESM-2 + logistic regression", "ESM-2 + MLP")]
 
 
-def test_the_full_length_hmm_inverts_the_decoy_ordering(report):
+def test_type_ii_is_the_hard_class_only_for_the_esm_heads(report):
     """The claim that type II decoys are the hard class is model-dependent.
 
-    Both ESM heads and the TM-region HMM confuse type II proteins more than
-    globular decoys, but the full-length HMM confuses GPCRs significantly more
-    than type II -- the opposite ordering. Pinned here because a write-up that
-    quotes only the TM-region HMM would present a general result that the data
-    does not support.
+    Both ESM heads confuse type II proteins significantly more than GPCRs and
+    globular decoys. The TM-region HMM confuses type II more than globular
+    decoys but not separably more than GPCRs, and the full-length HMM
+    separates none of its three decoy rates. An earlier scoring put positives
+    and decoys on different E-value scales and made the full-length HMM look
+    as if it confused GPCRs significantly more than type II. On one scale that
+    inversion is gone, and this pins it so it cannot quietly come back.
     """
     by_model = {row["model"]: row for row in report["decoy_difficulty_ordering"]}
-    assert by_model["Profile HMM, full-length"]["confused_more_than_type_ii"] == ["gpcr"]
+    full_length = by_model["Profile HMM, full-length"]
+    assert not full_length["harder_than"]
+    assert not full_length["confused_more_than_type_ii"]
+    assert by_model["Profile HMM, TM regions"]["harder_than"] == ["globular"]
+    assert by_model["Profile HMM, TM regions"]["not_separated_from"] == ["gpcr"]
     for label in ("ESM-2 + logistic regression", "ESM-2 + MLP"):
         assert "gpcr" in by_model[label]["harder_than"]
         assert not by_model[label]["confused_more_than_type_ii"]
+
+
+def test_the_two_hmms_differ(report):
+    """The TM-region HMM beats the full-length one on AUC, and the intervals agree."""
+    pairs = {(p["a"], p["b"]): p["separated"] for p in report["roc_auc_pairs"]}
+    assert pairs[("Profile HMM, full-length", "Profile HMM, TM regions")]

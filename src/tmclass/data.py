@@ -188,6 +188,7 @@ def fetch_class(
     *,
     allow_snapshot: bool = True,
     budget: float = LIVE_BUDGET,
+    use_snapshot: bool = False,
 ) -> Path:
     """Download one sequence class as TSV, including transmembrane features.
 
@@ -195,11 +196,23 @@ def fetch_class(
     healthy, falls back to paginated search when it is not, and finally falls
     back to the pinned snapshot so an outage cannot stop a run. Whichever source
     is used gets recorded in PROVENANCE.
+
+    ``use_snapshot`` skips UniProt and any cached download and reads the pinned
+    snapshot directly, which is how the published results are reproduced.
     """
     if name not in QUERIES:
         raise KeyError(f"Unknown class {name!r}; expected one of {sorted(QUERIES)}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if use_snapshot:
+        destination.write_bytes(read_snapshot(name))
+        PROVENANCE[name] = {
+            "source": "snapshot",
+            "snapshot_date": _snapshot_manifest()["date"],
+            "reason": "requested with --snapshot",
+        }
+        return destination
+
     if destination.exists() and destination.stat().st_size > 0:
         PROVENANCE[name] = {"source": "cache", "path": str(destination)}
         return destination

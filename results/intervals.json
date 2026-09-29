@@ -8,14 +8,14 @@
   },
   "roc_auc": {
     "Profile HMM, full-length": {
-      "estimate": 0.8344,
-      "ci_lower": 0.8068,
-      "ci_upper": 0.862
+      "estimate": 0.7646,
+      "ci_lower": 0.7332,
+      "ci_upper": 0.796
     },
     "Profile HMM, TM regions": {
-      "estimate": 0.9076,
-      "ci_lower": 0.8862,
-      "ci_upper": 0.929
+      "estimate": 0.8786,
+      "ci_lower": 0.8544,
+      "ci_upper": 0.9028
     },
     "ESM-2 + logistic regression": {
       "estimate": 0.9801,
@@ -63,26 +63,26 @@
   "false_positive_rate": {
     "Profile HMM, full-length": {
       "type_ii": {
-        "estimate": 0.0307,
-        "ci_lower": 0.0172,
-        "ci_upper": 0.0542
+        "estimate": 0.0223,
+        "ci_lower": 0.0114,
+        "ci_upper": 0.0435
       },
       "gpcr": {
-        "estimate": 0.0988,
-        "ci_lower": 0.0626,
-        "ci_upper": 0.1526
+        "estimate": 0.0581,
+        "ci_lower": 0.0319,
+        "ci_upper": 0.1037
       },
       "globular": {
-        "estimate": 0.0196,
-        "ci_lower": 0.0095,
-        "ci_upper": 0.0398
+        "estimate": 0.0168,
+        "ci_lower": 0.0077,
+        "ci_upper": 0.0361
       }
     },
     "Profile HMM, TM regions": {
       "type_ii": {
-        "estimate": 0.1592,
-        "ci_lower": 0.125,
-        "ci_upper": 0.2007
+        "estimate": 0.1732,
+        "ci_lower": 0.1375,
+        "ci_upper": 0.2158
       },
       "gpcr": {
         "estimate": 0.0872,
@@ -134,24 +134,23 @@
     {
       "model": "Profile HMM, full-length",
       "type_ii_rate": {
-        "estimate": 0.0307,
-        "ci_lower": 0.0172,
-        "ci_upper": 0.0542
+        "estimate": 0.0223,
+        "ci_lower": 0.0114,
+        "ci_upper": 0.0435
       },
       "harder_than": [],
       "not_separated_from": [
-        "globular"
-      ],
-      "confused_more_than_type_ii": [
+        "globular",
         "gpcr"
-      ]
+      ],
+      "confused_more_than_type_ii": []
     },
     {
       "model": "Profile HMM, TM regions",
       "type_ii_rate": {
-        "estimate": 0.1592,
-        "ci_lower": 0.125,
-        "ci_upper": 0.2007
+        "estimate": 0.1732,
+        "ci_lower": 0.1375,
+        "ci_upper": 0.2158
       },
       "harder_than": [
         "globular"

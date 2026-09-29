@@ -11,8 +11,8 @@ install:
 	$(PYTHON) -m pip install -e ".[dev,embeddings]"
 
 ## Fetch all four sequence classes from UniProt and cluster them at 40% identity.
-## This is the slowest step (~40 min for CD-HIT on the type I set) but its
-## output is cached, so later runs skip it.
+## CD-HIT takes about 2 minutes on the type I set, and its output is cached
+## against a checksum of the input, so later runs skip it.
 data:
 	$(PYTHON) -c "from pathlib import Path; \
 	from tmclass import data, pipeline; \

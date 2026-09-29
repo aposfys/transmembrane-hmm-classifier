@@ -256,8 +256,7 @@ def parse_tsv(path: Path, limit: int | None = None) -> list[Protein]:
 
     Args:
         limit: Keep only the first N entries after sorting. Intended for smoke
-            runs that need to exercise the whole pipeline quickly; CD-HIT on the
-            full type I set alone takes about 40 minutes. Truncating after the
+            runs that need to exercise the whole pipeline quickly. Truncating after the
             sort keeps the subset deterministic and reproducible.
     """
     reader = csv.DictReader(io.StringIO(path.read_text(encoding="utf-8")), delimiter="\t")
